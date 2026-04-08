@@ -5,7 +5,6 @@ from datetime import datetime
 # 1. PAGE SETUP & STYLE
 st.set_page_config(page_title="TDS Compliance Pro V5", layout="wide")
 
-# Custom CSS for Professional Look
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -16,26 +15,18 @@ st.markdown("""
 @st.cache_data
 def load_data():
     try:
-        # Load the Excel file
         df = pd.read_excel("TDS_Master_Data.xlsx", engine='openpyxl')
-        
-        # Clean headers (removes hidden spaces)
         df.columns = [c.strip() for c in df.columns]
-        
-        # Clean text in columns
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
         
-        # FIXED DATE LOGIC - This handles the error from your screenshot
+        # FIXED DATE LOGIC
         df['Effective From'] = pd.to_datetime(df['Effective From'], errors='coerce', format='mixed')
         df['Effective To'] = pd.to_datetime(df['Effective To'], errors='coerce', format='mixed').fillna(pd.Timestamp('2099-12-31'))
-        
-        # Remove any rows where Section is missing
         df = df[df['Section'] != 'nan']
-        
         return df
     except Exception as e:
-        st.error(f"Excel Error: {e}. Please check if your column names match exactly.")
+        st.error(f"Excel Error: {e}")
         return None
 
 df = load_data()
@@ -46,26 +37,21 @@ if df is not None:
     st.sidebar.info("Developed by Harshita")
     
     st.title("🏛️ TDS Compliance Professional - V5")
-    st.caption(f"System Date: {datetime.now().strftime('%d %B, %Y')} | Data Source: TDS_Master_Data.xlsx")
+    st.caption(f"System Date: {datetime.now().strftime('%d %B, %Y')}")
     st.write("---")
 
-    # 2. INPUT AREA
     col1, col2 = st.columns(2, gap="large")
 
     with col1:
         st.subheader("📋 Step 1: Transaction Details")
-        
-        # Section Filter
         sections = sorted(df['Section'].unique().tolist())
         section = st.selectbox("1. Select Section", options=sections)
         f_df = df[df['Section'] == section]
         
-        # Payer Category Filter
         payer_types = sorted(f_df['Payer Category'].unique().tolist())
         payer_sel = st.selectbox("2. Payer Category", options=payer_types)
         f_df_payer = f_df[f_df['Payer Category'] == payer_sel]
         
-        # Nature Filter
         natures = sorted(f_df_payer['Nature of Payment'].unique().tolist())
         nature_sel = st.selectbox("3. Nature of Payment", options=natures)
         f_df_nature = f_df_payer[f_df_payer['Nature of Payment'] == nature_sel]
@@ -74,8 +60,6 @@ if df is not None:
 
     with col2:
         st.subheader("👤 Step 2: Payee Details")
-        
-        # Payee Dropdown Logic (Shows all payees for this section/payer)
         all_payees = sorted(f_df_payer['Payee Type'].unique().tolist())
         payee_sel = st.selectbox("5. Category of Payee", options=all_payees)
 
@@ -85,17 +69,13 @@ if df is not None:
 
     st.write("---")
 
-    # 3. CALCULATION ENGINE
     if st.button("🚀 EXECUTE COMPLIANCE CHECK", use_container_width=True):
         target_date = pd.to_datetime(pay_date)
-        
-        # Final Row Matching
         final_match = f_df_payer[
             (f_df_payer['Nature of Payment'] == nature_sel) & 
             (f_df_payer['Payee Type'] == payee_sel)
         ]
         
-        # Date Logic for 194LA and other threshold changes
         rule = final_match[
             (final_match['Effective From'] <= target_date) & 
             (final_match['Effective To'] >= target_date)
@@ -107,15 +87,12 @@ if df is not None:
                 base_rate = float(sel['Rate of TDS (%)'])
                 thresh = float(sel['Threshold Amount (Rs)'])
                 
-                # Special Aggregate Override for 194C
                 if section == "194C" and calc_mode == "Aggregate (Full Year)":
                     thresh = 100000.0
                 
-                # PAN Logic
                 final_rate = 20.0 if pan_status == "No" else base_rate
                 tax = (amount * final_rate) / 100
                 
-                # DASHBOARD RESULTS
                 r1, r2, r3 = st.columns(3)
                 if amount > thresh:
                     r1.metric("TDS PAYABLE", f"₹{tax:,.2f}", delta="DEDUCT", delta_color="inverse")
@@ -127,4 +104,14 @@ if df is not None:
                     r1.metric("CALCULATED TDS", f"₹{tax:,.2f}", delta="NOT APPLICABLE")
                     r2.metric("RATE", f"{final_rate}%")
                     r3.metric("THRESHOLD", f"₹{thresh:,.0f}", delta="SAFE")
-                    st.warning("
+                    st.warning("### ⚠️ STATUS: TDS NOT APPLICABLE")
+                    st.write(f"**Compliance Note:** No deduction is required because the amount (₹{amount:,.0f}) is below the threshold of **₹{thresh:,.0f}**.")
+                    st.info(f"**Math Breakdown:** At {final_rate}%, the calculated TDS would be ₹{tax:,.2f} if the threshold were reached.")
+
+                with st.expander("📝 View Statutory Reference"):
+                    st.write(f"**Section:** {section} | **Effective Range:** {sel['Effective From'].date()} to {sel['Effective To'].date()}")
+                    st.info(f"**Legal Note:** {sel['Notes']}")
+            except Exception as e:
+                st.error("Error calculating results. Check Excel format.")
+        else:
+            st.error("No statutory rule found for this date. Check Excel ranges.")
