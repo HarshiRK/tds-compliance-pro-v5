@@ -9,7 +9,6 @@ st.set_page_config(page_title="TDS Compliance Pro V5", layout="wide")
 def load_data():
     try:
         df = pd.read_excel("TDS_Master_Data.xlsx", engine='openpyxl')
-        # Clean headers and data immediately
         df.columns = [c.strip() for c in df.columns]
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
@@ -25,9 +24,7 @@ df = load_data()
 
 if df is not None:
     st.sidebar.title("🛡️ Compliance Engine V5")
-    
-    # DEBUG MODE (Keep this on while testing with your manager)
-    show_debug = st.sidebar.checkbox("Show Debug Info", value=False)
+    st.sidebar.info("Harshita's Pro Model")
     
     st.title("🏛️ TDS Compliance Professional - V5")
     st.write("---")
@@ -35,33 +32,32 @@ if df is not None:
     col1, col2 = st.columns(2, gap="large")
 
     with col1:
-        st.subheader("📋 Step 1: Payer & Section")
+        st.subheader("📋 Step 1: Transaction Details")
         
-        # 1. Section
+        # 1. SECTION
         sections = sorted(df['Section'].unique().tolist())
         section = st.selectbox("1. Select Section", options=sections)
         f_df = df[df['Section'] == section]
         
-        # 2. Payer Category
+        # 2. PAYER (New feature for 194A)
         payer_types = sorted(f_df['Payer Category'].unique().tolist())
         payer_sel = st.selectbox("2. Payer Category", options=payer_types)
         f_df_payer = f_df[f_df['Payer Category'] == payer_sel]
         
-        # 3. Nature of Payment
+        # 3. NATURE
         natures = sorted(f_df_payer['Nature of Payment'].unique().tolist())
         nature_sel = st.selectbox("3. Nature of Payment", options=natures)
-        f_df_nature = f_df_payer[f_df_payer['Nature of Payment'] == nature_sel]
         
-        amount = st.number_input("4. Transaction Amount (INR)", min_value=0.0, value=250000.0)
+        amount = st.number_input("4. Amount (INR)", min_value=0.0, value=250000.0)
 
     with col2:
-        st.subheader("👤 Step 2: Payee Configuration")
+        st.subheader("👤 Step 2: Payee Details")
         
-        # 4. Payee Type (Forced Dropdown)
-        payee_options = sorted(f_df_nature['Payee Type'].unique().tolist())
-        
-        # This line ensures the dropdown shows up if there is ANY data
-        payee_sel = st.selectbox("5. Category of Payee", options=payee_options if payee_options else ["Any Resident"])
+        # --- FIXED PAYEE LOGIC ---
+        # Instead of filtering by Nature, we show ALL Payees available for this Section/Payer
+        # This ensures 'Individual' and 'Others' both show up for 194C
+        all_payees = sorted(f_df_payer['Payee Type'].unique().tolist())
+        payee_sel = st.selectbox("5. Category of Payee", options=all_payees)
 
         pan_status = st.radio("6. PAN Available?", ["Yes", "No"], horizontal=True)
         pay_date = st.date_input("7. Date of Payment")
@@ -72,10 +68,15 @@ if df is not None:
     if st.button("🚀 EXECUTE COMPLIANCE CHECK", use_container_width=True):
         target = pd.to_datetime(pay_date)
         
-        # Match all filters
-        final_match = f_df_nature[f_df_nature['Payee Type'] == payee_sel]
+        # FINAL MATCH: Section + Payer + Nature + Payee
+        final_match = f_df_payer[
+            (f_df_payer['Nature of Payment'] == nature_sel) & 
+            (f_df_payer['Payee Type'] == payee_sel)
+        ]
+        
         rule = final_match[(final_match['Effective From'] <= target) & (final_match['Effective To'] >= target)]
         
+        # Fallback if date is slightly off
         if rule.empty and not final_match.empty:
             rule = final_match.sort_values(by='Effective From', ascending=False).head(1)
 
@@ -85,6 +86,7 @@ if df is not None:
                 base_rate = float(sel['Rate of TDS (%)'])
                 thresh = float(sel['Threshold Amount (Rs)'])
                 
+                # Special 194C Aggregate Logic
                 if section == "194C" and calc_mode == "Aggregate (Full Year)":
                     thresh = 100000.0
                 
@@ -102,15 +104,12 @@ if df is not None:
                     r2.metric("RATE", f"{final_rate}%")
                     r3.metric("THRESHOLD", f"₹{thresh:,.0f}", delta="SAFE")
                     st.warning("### ⚠️ TDS NOT APPLICABLE")
-                
-                with st.expander("📝 View Statutory Reference"):
-                    st.info(f"**Legal Note:** {sel['Notes']}")
-            except:
-                st.error("Excel numeric error.")
-        else:
-            st.error("No matching rule found in Excel for these selections.")
+                    st.write(f"Reason: Amount is below the limit of ₹{thresh:,.0f}")
 
-    # DEBUG SECTION
-    if show_debug:
-        st.write("### 🔍 Debug: Rows found for this Section & Payer")
-        st.write(f_df_payer)
+                with st.expander("📝 View Statutory Details"):
+                    st.write(f"**Section:** {section} | **Payer:** {payer_sel}")
+                    st.info(f"**Note:** {sel['Notes']}")
+            except:
+                st.error("Excel numeric error in Rate or Threshold columns.")
+        else:
+            st.error("No matching rule found. Please check if your Excel has a row for this Payee Category.")
